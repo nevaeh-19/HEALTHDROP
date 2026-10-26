@@ -1,0 +1,458 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// =====================================================
+// OLED
+// =====================================================
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+#define OLED_SDA 21
+#define OLED_SCL 22
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// =====================================================
+// DS18B20 TEMPERATURE SENSOR
+// =====================================================
+
+#define ONE_WIRE_BUS 4
+
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+// =====================================================
+// TCS3200 COLOR SENSOR
+// =====================================================
+
+#define TCS_S0  25
+#define TCS_S1  26
+#define TCS_S2  27
+#define TCS_S3  32
+#define TCS_OUT 33
+
+// =====================================================
+// MQ-135
+// =====================================================
+
+#define MQ135_PIN 35
+
+// =====================================================
+// SENSOR VARIABLES
+// =====================================================
+
+float temperatureC = 0;
+
+unsigned long redFrequency = 0;
+unsigned long greenFrequency = 0;
+unsigned long blueFrequency = 0;
+
+int gasValue = 0;
+
+String oilResult = "WAITING";
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("       HEALTHDROP SYSTEM");
+  Serial.println("================================");
+
+  // ---------------------------------------------------
+  // I2C
+  // ---------------------------------------------------
+
+  Wire.begin(OLED_SDA, OLED_SCL);
+
+  // ---------------------------------------------------
+  // OLED
+  // ---------------------------------------------------
+
+  bool oledStarted = false;
+
+  if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
+  {
+    oledStarted = true;
+  }
+  else if (display.begin(SSD1306_SWITCHCAPVCC, 0x3D))
+  {
+    oledStarted = true;
+  }
+
+  if (oledStarted)
+  {
+    display.clearDisplay();
+
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setTextSize(2);
+    display.setCursor(15, 5);
+    display.println("HEALTHDROP");
+
+    display.setTextSize(1);
+    display.setCursor(25, 35);
+    display.println("Initializing...");
+
+    display.display();
+
+    Serial.println("OLED: OK");
+  }
+  else
+  {
+    Serial.println("OLED: NOT FOUND");
+  }
+
+  // ---------------------------------------------------
+  // DS18B20
+  // ---------------------------------------------------
+
+  sensors.begin();
+
+  Serial.println("DS18B20: Initialized");
+
+  // ---------------------------------------------------
+  // TCS3200
+  // ---------------------------------------------------
+
+  pinMode(TCS_S0, OUTPUT);
+  pinMode(TCS_S1, OUTPUT);
+  pinMode(TCS_S2, OUTPUT);
+  pinMode(TCS_S3, OUTPUT);
+
+  pinMode(TCS_OUT, INPUT);
+
+  // Frequency scaling = 20%
+  digitalWrite(TCS_S0, HIGH);
+  digitalWrite(TCS_S1, LOW);
+
+  Serial.println("TCS3200: Initialized");
+
+  // ---------------------------------------------------
+  // MQ-135
+  // ---------------------------------------------------
+
+  pinMode(MQ135_PIN, INPUT);
+
+  Serial.println("MQ-135: Initialized");
+
+  Serial.println("--------------------------------");
+  Serial.println("All sensors initialized");
+  Serial.println("--------------------------------");
+
+  delay(2000);
+}
+
+
+// =====================================================
+// READ TCS3200
+// =====================================================
+
+unsigned long readColorFrequency(int s2State, int s3State)
+{
+  digitalWrite(TCS_S2, s2State);
+  digitalWrite(TCS_S3, s3State);
+
+  delay(50);
+
+  unsigned long pulseDuration;
+
+  pulseDuration = pulseIn(TCS_OUT, LOW, 100000);
+
+  if (pulseDuration == 0)
+  {
+    return 0;
+  }
+
+  unsigned long frequency = 1000000UL / pulseDuration;
+
+  return frequency;
+}
+
+
+// =====================================================
+// READ ALL COLORS
+// =====================================================
+
+void readColorSensor()
+{
+  // RED
+  redFrequency = readColorFrequency(LOW, LOW);
+
+  // GREEN
+  greenFrequency = readColorFrequency(HIGH, HIGH);
+
+  // BLUE
+  blueFrequency = readColorFrequency(LOW, HIGH);
+}
+
+
+// =====================================================
+// READ MQ-135
+// =====================================================
+
+int readGasSensor()
+{
+  long total = 0;
+
+  const int samples = 10;
+
+  for (int i = 0; i < samples; i++)
+  {
+    total += analogRead(MQ135_PIN);
+    delay(10);
+  }
+
+  return total / samples;
+}
+
+
+// =====================================================
+// OIL QUALITY CLASSIFICATION
+// =====================================================
+//
+// NOTE:
+// These values are ONLY temporary prototype thresholds.
+// They must be calibrated using real oil samples.
+//
+// gasValue:
+// lower  -> cleaner prototype reading
+// higher -> more gas response
+//
+// Color:
+// Used only as a simple experimental feature here.
+// =====================================================
+
+String classifyOil()
+{
+  /*
+     Temporary demonstration logic.
+
+     BAD:
+     Very high gas response.
+
+     DEGRADED:
+     Medium gas response.
+
+     GOOD:
+     Lower gas response.
+
+     You should replace these thresholds after
+     collecting real training/reference data.
+  */
+
+  if (gasValue > 2500)
+  {
+    return "BAD OIL";
+  }
+  else if (gasValue > 1400)
+  {
+    return "DEGRADED OIL";
+  }
+  else
+  {
+    return "GOOD OIL";
+  }
+}
+
+
+// =====================================================
+// DISPLAY SENSOR VALUES
+// =====================================================
+
+void displaySensorData()
+{
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Title
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("HEALTHDROP");
+
+  // Temperature
+  display.setCursor(0, 12);
+  display.print("Temp: ");
+  display.print(temperatureC, 1);
+  display.println(" C");
+
+  // RGB
+  display.setCursor(0, 23);
+  display.print("R:");
+  display.print(redFrequency);
+
+  display.print(" G:");
+  display.print(greenFrequency);
+
+  display.print(" B:");
+  display.println(blueFrequency);
+
+  // Gas
+  display.setCursor(0, 34);
+  display.print("Gas: ");
+  display.println(gasValue);
+
+  // Result
+  display.setTextSize(1);
+  display.setCursor(0, 47);
+  display.println("RESULT:");
+
+  display.setTextSize(1);
+  display.setCursor(55, 47);
+  display.println(oilResult);
+
+  display.display();
+}
+
+
+// =====================================================
+// DISPLAY LARGE RESULT
+// =====================================================
+
+void displayResult()
+{
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(25, 0);
+  display.println("HEALTHDROP");
+
+  display.setCursor(0, 15);
+  display.println("--------------------");
+
+  display.setCursor(15, 27);
+
+  if (oilResult == "GOOD OIL")
+  {
+    display.println("GOOD OIL");
+  }
+  else if (oilResult == "DEGRADED OIL")
+  {
+    display.println("DEGRADED OIL");
+  }
+  else if (oilResult == "BAD OIL")
+  {
+    display.println("BAD OIL");
+  }
+  else
+  {
+    display.println("UNKNOWN");
+  }
+
+  display.setTextSize(1);
+
+  display.setCursor(0, 50);
+  display.print("Gas:");
+  display.print(gasValue);
+
+  display.display();
+}
+
+
+// =====================================================
+// SERIAL OUTPUT
+// =====================================================
+
+void printSensorData()
+{
+  Serial.println();
+  Serial.println("================================");
+
+  Serial.print("Temperature: ");
+  Serial.print(temperatureC);
+  Serial.println(" C");
+
+  Serial.print("Red Frequency: ");
+  Serial.println(redFrequency);
+
+  Serial.print("Green Frequency: ");
+  Serial.println(greenFrequency);
+
+  Serial.print("Blue Frequency: ");
+  Serial.println(blueFrequency);
+
+  Serial.print("MQ-135 Gas Value: ");
+  Serial.println(gasValue);
+
+  Serial.print("OIL RESULT: ");
+  Serial.println(oilResult);
+
+  Serial.println("================================");
+}
+
+
+// =====================================================
+// MAIN LOOP
+// =====================================================
+
+void loop()
+{
+  // ---------------------------------------------------
+  // TEMPERATURE
+  // ---------------------------------------------------
+
+  sensors.requestTemperatures();
+
+  temperatureC = sensors.getTempCByIndex(0);
+
+  // Check DS18B20 error
+  if (temperatureC == DEVICE_DISCONNECTED_C)
+  {
+    Serial.println("ERROR: DS18B20 disconnected!");
+
+    temperatureC = 0;
+  }
+
+  // ---------------------------------------------------
+  // COLOR
+  // ---------------------------------------------------
+
+  readColorSensor();
+
+  // ---------------------------------------------------
+  // MQ-135
+  // ---------------------------------------------------
+
+  gasValue = readGasSensor();
+
+  // ---------------------------------------------------
+  // CLASSIFY OIL
+  // ---------------------------------------------------
+
+  oilResult = classifyOil();
+
+  // ---------------------------------------------------
+  // SERIAL MONITOR
+  // ---------------------------------------------------
+
+  printSensorData();
+
+  // ---------------------------------------------------
+  // OLED SENSOR SCREEN
+  // ---------------------------------------------------
+
+  displaySensorData();
+
+  delay(3000);
+
+  // ---------------------------------------------------
+  // OLED RESULT SCREEN
+  // ---------------------------------------------------
+
+  displayResult();
+
+  delay(3000);
+}
